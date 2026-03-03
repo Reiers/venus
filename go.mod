@@ -363,4 +363,6 @@ replace (
 	github.com/filecoin-project/filecoin-ffi => ./extern/filecoin-ffi
 	github.com/filecoin-project/go-jsonrpc => github.com/ipfs-force-community/go-jsonrpc v0.1.9
 	github.com/filecoin-project/test-vectors => ./extern/test-vectors
+	// FIP-XXXX Daybreak: use forked go-state-types with VDWM transition + network.Version28
+	github.com/filecoin-project/go-state-types => github.com/Reiers/go-state-types v0.0.0-20260303140350-2227610e233a
 )

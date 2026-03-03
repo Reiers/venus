@@ -492,6 +492,13 @@ func DefaultUpgradeSchedule(cf *ChainFork, upgradeHeight *config.ForkUpgradeConf
 			}},
 			Expensive: true,
 		},
+		// FIP-XXXX Daybreak: Restore Equal Sector Quality and Burn Mining Reserve
+		{
+			Height:    upgradeHeight.UpgradeDaybreakHeight,
+			Network:   network.Version28,
+			Migration: cf.UpgradeActorsDaybreak,
+			Expensive: true,
+		},
 	}
 
 	for _, u := range updates {
@@ -4068,6 +4075,153 @@ func (c *ChainFork) upgradeActorsV17Common(
 	})
 	if err != nil {
 		return cid.Undef, fmt.Errorf("failed to persist new state root: %w", err)
+	}
+
+	// Persists the new tree and shuts down the flush worker
+	if err := writeStore.Flush(ctx); err != nil {
+		return cid.Undef, fmt.Errorf("writeStore flush failed: %w", err)
+	}
+
+	if err := writeStore.Shutdown(ctx); err != nil {
+		return cid.Undef, fmt.Errorf("writeStore shutdown failed: %w", err)
+	}
+
+	return newRoot, nil
+}
+
+// UpgradeActorsDaybreak implements the FIP-XXXX Daybreak migration.
+//
+// This upgrade:
+// 1. Migrates actor code CIDs to v18 (standard upgrade procedure)
+// 2. Burns the mining reserve: transfers f090 balance to f099 (burnt funds)
+//
+// The VDWM transition (10x → 1x linear interpolation) is handled entirely
+// within the v18 builtin actors — no client-side state changes needed.
+func (c *ChainFork) UpgradeActorsDaybreak(ctx context.Context, cache MigrationCache,
+	root cid.Cid, epoch abi.ChainEpoch, ts *types.TipSet) (cid.Cid, error) {
+	// Use all the CPUs except 3.
+	workerCount := MigrationMaxWorkerCount - 3
+	if workerCount <= 0 {
+		workerCount = 1
+	}
+
+	logPeriod, err := getMigrationProgressLogPeriod()
+	if err != nil {
+		return cid.Undef, fmt.Errorf("error getting progress log period: %w", err)
+	}
+
+	config := migration.Config{
+		MaxWorkers:        uint(workerCount),
+		JobQueueSize:      1000,
+		ResultQueueSize:   100,
+		ProgressLogPeriod: logPeriod,
+	}
+	newRoot, err := c.upgradeActorsDaybreakCommon(ctx, cache, root, epoch, ts, config)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("migrating actors Daybreak state: %w", err)
+	}
+	return newRoot, nil
+}
+
+func (c *ChainFork) upgradeActorsDaybreakCommon(
+	ctx context.Context,
+	cache MigrationCache,
+	root cid.Cid,
+	epoch abi.ChainEpoch,
+	ts *types.TipSet,
+	cfg migration.Config,
+) (cid.Cid, error) {
+	writeStore := blockstoreutil.NewAutobatch(ctx, c.bs, units.GiB/4)
+	adtStore := adt.WrapStore(ctx, cbor.NewCborStore(writeStore))
+
+	// TODO(daybreak): Update to actorstypes.Version18 when go-state-types exports it
+	// For now, we reuse Version17 since the v18 bundle doesn't exist yet
+	if err := actors.LoadBundles(ctx, writeStore, actorstypes.Version17); err != nil {
+		return cid.Undef, fmt.Errorf("failed to load manifest bundle: %w", err)
+	}
+
+	// Load the state root.
+	var stateRoot vmstate.StateRoot
+	if err := adtStore.Get(ctx, root, &stateRoot); err != nil {
+		return cid.Undef, fmt.Errorf("failed to decode state root: %w", err)
+	}
+
+	if stateRoot.Version != vmstate.StateTreeVersion5 {
+		return cid.Undef, fmt.Errorf(
+			"expected state root version 5 for actors Daybreak upgrade, got %d",
+			stateRoot.Version,
+		)
+	}
+
+	// TODO(daybreak): Update to actorstypes.Version18
+	manifest, ok := actors.GetManifest(actorstypes.Version17)
+	if !ok {
+		return cid.Undef, fmt.Errorf("no manifest CID for Daybreak upgrade")
+	}
+
+	// Perform the migration
+	// TODO(daybreak): Use nv28.MigrateStateTree when go-state-types has builtin/v18/migration
+	newHamtRoot, err := nv27.MigrateStateTree(ctx, adtStore, manifest, stateRoot.Actors,
+		epoch, cfg, migrationLogger{}, cache)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("upgrading to actors Daybreak: %w", err)
+	}
+
+	// --- Mining reserve burn (f090 → f099) ---
+	// Persist the migrated state so we can reload it as a mutable tree.
+	migratedRoot, err := adtStore.Put(ctx, &vmstate.StateRoot{
+		Version: vmstate.StateTreeVersion5,
+		Actors:  newHamtRoot,
+		Info:    stateRoot.Info,
+	})
+	if err != nil {
+		return cid.Undef, fmt.Errorf("failed to persist migrated state root: %w", err)
+	}
+
+	tree, err := vmstate.LoadState(ctx, adtStore, migratedRoot)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("failed to load migrated state tree: %w", err)
+	}
+
+	// Get the reserve balance before the transfer
+	reserveActor, found, err := tree.GetActor(ctx, builtin.ReserveAddress)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("failed to get reserve actor: %w", err)
+	}
+	if !found {
+		return cid.Undef, fmt.Errorf("reserve actor (f090) not found")
+	}
+
+	burnAmount := reserveActor.Balance
+	if burnAmount.GreaterThan(big.Zero()) {
+		log.Infof("Daybreak: burning mining reserve — transferring %s FIL from f090 to f099",
+			types.FIL(burnAmount))
+
+		if err := doTransfer(tree, builtin.ReserveAddress, builtin.BurntFundsActorAddr, burnAmount); err != nil {
+			return cid.Undef, fmt.Errorf("failed to burn mining reserve: %w", err)
+		}
+
+		// Sanity check: total supply must still equal FilBase
+		total := abi.NewTokenAmount(0)
+		if err := tree.ForEach(func(addr address.Address, act *types.Actor) error {
+			total = big.Add(total, act.Balance)
+			return nil
+		}); err != nil {
+			return cid.Undef, fmt.Errorf("Daybreak: failed to verify total balance: %w", err)
+		}
+
+		exp := types.FromFil(constants.FilBase)
+		if !exp.Equals(total) {
+			return cid.Undef, fmt.Errorf("Daybreak: total balance mismatch after reserve burn: expected %s, got %s", exp, total)
+		}
+	} else {
+		log.Warnf("Daybreak: reserve actor (f090) has zero balance, nothing to burn")
+	}
+
+	// Flush the final state tree (writes StateRoot wrapper with version + info)
+	newRoot, err := tree.Flush(ctx)
+	if err != nil {
+		return cid.Undef, fmt.Errorf("failed to flush state tree after reserve burn: %w", err)
 	}
 
 	// Persists the new tree and shuts down the flush worker

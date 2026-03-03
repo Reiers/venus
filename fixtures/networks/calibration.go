@@ -76,6 +76,8 @@ func Calibration() *NetworkConf {
 				UpgradeTeepHeight:                    2523454, // 2025-03-26T23:00:00Z
 				UpgradeTockFixHeight:                 2558014, // 2025-04-07T23:00:00Z
 				UpgradeGoldenWeekHeight:              3007294, // 2025-09-10T23:00:00Z
+				UpgradeDaybreakHeight:                9999999999,
+				DaybreakTransitionDuration:           1051200,
 			},
 			DrandSchedule:           map[abi.ChainEpoch]config.DrandEnum{0: 1},
 			AddressNetwork:          address.Testnet,

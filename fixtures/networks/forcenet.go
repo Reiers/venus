@@ -71,6 +71,8 @@ func ForceNet() *NetworkConf {
 				UpgradeTockHeight:                    -31,
 				UpgradeTockFixHeight:                 -29,
 				UpgradeGoldenWeekHeight:              20,
+				UpgradeDaybreakHeight:                30,
+				DaybreakTransitionDuration:           200,
 			},
 			DrandSchedule:           map[abi.ChainEpoch]config.DrandEnum{0: config.DrandQuicknet},
 			AddressNetwork:          address.Testnet,

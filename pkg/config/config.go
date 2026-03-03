@@ -353,6 +353,9 @@ type ForkUpgradeConfig struct {
 	UpgradeTockHeight                    abi.ChainEpoch `json:"upgradeTockHeight"`
 	UpgradeTockFixHeight                 abi.ChainEpoch `json:"upgradeTockFixHeight"`
 	UpgradeGoldenWeekHeight              abi.ChainEpoch `json:"upgradeGoldenWeekHeight"`
+	// FIP-XXXX Daybreak: Restore Equal Sector Quality and Burn Mining Reserve
+	UpgradeDaybreakHeight                abi.ChainEpoch `json:"upgradeDaybreakHeight"`
+	DaybreakTransitionDuration           abi.ChainEpoch `json:"daybreakTransitionDuration"`
 }
 
 func IsNearUpgrade(epoch, upgradeEpoch abi.ChainEpoch) bool {
@@ -400,6 +403,8 @@ var DefaultForkUpgradeParam = &ForkUpgradeConfig{
 	UpgradeTockHeight:                    4867320 + 90*builtin.EpochsInDay,
 	UpgradeTockFixHeight:                 -29,
 	UpgradeGoldenWeekHeight:              5348280,
+	UpgradeDaybreakHeight:                9999999999,
+	DaybreakTransitionDuration:           1051200, // ~12 months at 30s epochs
 }
 
 func newDefaultNetworkParamsConfig() *NetworkParamsConfig {

@@ -65,6 +65,8 @@ func Net2k() *NetworkConf {
 				UpgradeTockHeight:                    -31,
 				UpgradeTockFixHeight:                 -29,
 				UpgradeGoldenWeekHeight:              200,
+				UpgradeDaybreakHeight:                210,
+				DaybreakTransitionDuration:           200, // short transition for devnet
 			},
 			DrandSchedule:           map[abi.ChainEpoch]config.DrandEnum{0: config.DrandQuicknet},
 			AddressNetwork:          address.Testnet,

@@ -70,6 +70,8 @@ func ButterflySnapNet() *NetworkConf {
 				UpgradeTockFixHeight:                 -29,
 				UpgradeTockHeight:                    100, // Changed to positive for NV27 Butterfly to avoid VestingFunds issue
 				UpgradeGoldenWeekHeight:              200,
+				UpgradeDaybreakHeight:                9999999999,
+				DaybreakTransitionDuration:           200,
 			},
 			DrandSchedule:           map[abi.ChainEpoch]config.DrandEnum{0: config.DrandQuicknet},
 			AddressNetwork:          address.Testnet,
